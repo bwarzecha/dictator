@@ -26,6 +26,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def safe_notification(title: str, subtitle: str = "", message: str = ""):
+    """Show notification with error handling for missing Info.plist.
+
+    When running from venv Python (not .app bundle), rumps.notification
+    may fail due to missing CFBundleIdentifier in Info.plist.
+    """
+    try:
+        rumps.notification(title, subtitle, message)
+    except Exception as e:
+        logger.warning(f"Could not show notification: {e}")
+
+
 class DictatorApp(rumps.App):
     """Main application class.
 
@@ -93,7 +105,7 @@ class DictatorApp(rumps.App):
 
         except Exception as e:
             logger.error(f"Failed to start recording: {e}")
-            rumps.notification(
+            safe_notification(
                 "Recording Error",
                 "",
                 f"Failed to start: {e}",
@@ -122,7 +134,7 @@ class DictatorApp(rumps.App):
 
         except Exception as e:
             logger.error(f"Failed to stop recording: {e}")
-            rumps.notification(
+            safe_notification(
                 "Recording Error",
                 "",
                 f"Failed to stop: {e}",
@@ -145,7 +157,7 @@ class DictatorApp(rumps.App):
             success = self.inserter.insert_text(text)
 
             if success:
-                rumps.notification(
+                safe_notification(
                     "Text Inserted",
                     "",
                     text[:100] + ("..." if len(text) > 100 else ""),
@@ -161,7 +173,7 @@ class DictatorApp(rumps.App):
 
         except FileNotFoundError:
             logger.error("Audio file not found")
-            rumps.notification(
+            safe_notification(
                 "Error",
                 "",
                 "Recording file not found. Please try again.",
@@ -169,7 +181,7 @@ class DictatorApp(rumps.App):
 
         except Exception as e:
             logger.error(f"Transcription error: {e}")
-            rumps.notification(
+            safe_notification(
                 "Transcription Failed",
                 "",
                 f"Error: {str(e)[:100]}",
@@ -230,7 +242,7 @@ class DictatorApp(rumps.App):
         logger.info("Text copied to clipboard")
 
         # Show notification
-        rumps.notification(
+        safe_notification(
             "Text Copied to Clipboard",
             "",
             f"{text[:200]}\n\nGrant accessibility permissions in System Settings to auto-paste.",
