@@ -24,16 +24,20 @@ echo "✅ Installed!"
 echo ""
 echo "📋 Next: Grant permissions"
 echo ""
+
+# Resolve the actual Python executable (not the symlink)
+PYTHON_REAL=$(readlink -f ./venv/bin/python 2>/dev/null || realpath ./venv/bin/python 2>/dev/null || ./venv/bin/python -c "import sys; print(sys.executable)")
+
 echo "   System Settings → Privacy & Security → Accessibility"
 echo "   Add this file:"
 echo ""
-echo "   $(pwd)/venv/bin/python"
+echo "   $PYTHON_REAL"
 echo ""
 echo "   (Path copied to clipboard - paste with Cmd+Shift+G)"
 echo ""
 
 # Copy path to clipboard
-echo "$(pwd)/venv/bin/python" | pbcopy
+echo "$PYTHON_REAL" | pbcopy
 
 echo "Then run: ./start.sh"
 echo ""
