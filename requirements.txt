@@ -1,0 +1,18 @@
+# UI & System Integration
+rumps
+pynput
+pyobjc-framework-ApplicationServices
+pyobjc-framework-Cocoa
+
+# Audio Recording
+sounddevice
+numpy
+
+# Transcription
+pywhispercpp
+
+# Development & Testing
+pytest
+pytest-cov
+black
+mypy

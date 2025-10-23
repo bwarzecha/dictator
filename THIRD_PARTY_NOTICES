@@ -1,0 +1,70 @@
+Third-Party Notices
+====================
+
+This project uses the following third-party libraries:
+
+## Runtime Dependencies
+
+### rumps
+- License: BSD-3-Clause
+- Repository: https://github.com/jaredks/rumps
+
+### pynput
+- License: LGPL-3.0
+- Repository: https://github.com/moses-palmer/pynput
+- Note: Used as a library dependency. This project does not modify pynput's source code.
+
+### pyobjc-framework-ApplicationServices
+- License: MIT
+- Repository: https://github.com/ronaldoussoren/pyobjc
+
+### pyobjc-framework-Cocoa
+- License: MIT
+- Repository: https://github.com/ronaldoussoren/pyobjc
+
+### sounddevice
+- License: MIT
+- Repository: https://github.com/spatialaudio/python-sounddevice
+
+### numpy
+- License: BSD
+- Repository: https://github.com/numpy/numpy
+
+### pywhispercpp
+- License: MIT
+- Repository: https://github.com/abdeladim-s/pywhispercpp
+
+## Development Dependencies
+
+### pytest
+- License: MIT
+- Repository: https://github.com/pytest-dev/pytest
+
+### pytest-cov
+- License: MIT
+- Repository: https://github.com/pytest-dev/pytest-cov
+
+### black
+- License: MIT
+- Repository: https://github.com/psf/black
+
+### mypy
+- License: MIT
+- Repository: https://github.com/python/mypy
+
+## AI Models
+
+### OpenAI Whisper
+- License: MIT
+- Repository: https://github.com/openai/whisper
+- Note: This project uses the Whisper model for speech recognition.
+
+---
+
+All licenses are compatible with this project's MIT license. For full license texts,
+please refer to the respective project repositories listed above.
+
+Special note regarding pynput (LGPL-3.0):
+This project uses pynput as a standard Python library dependency and does not modify
+its source code. Users can replace the pynput library as it is installed via pip and
+dynamically linked at runtime.

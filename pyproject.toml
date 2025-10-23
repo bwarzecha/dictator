@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dictator"
+version = "1.0.0"
+description = "Voice dictation app for macOS using local Whisper models"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Dictator Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "rumps>=0.4.0",
+    "pynput>=1.7.6",
+    "pyobjc-framework-ApplicationServices>=10.0",
+    "pyobjc-framework-Cocoa>=10.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24.0",
+    "pywhispercpp>=1.0.0",
+    "PyQt6>=6.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "mypy>=1.5.0",
+]
+
+[project.scripts]
+dictator = "dictator.main:main"
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=src/dictator --cov-report=term-missing"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["dictator*"]
