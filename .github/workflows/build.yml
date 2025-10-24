@@ -91,6 +91,36 @@ jobs:
             echo "⚠️  App is ad-hoc signed (no Developer ID)"
           fi
 
+      - name: Notarize app (release builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ]; then
+            echo "⚠️  Notarization credentials not provided, skipping notarization"
+            echo "⚠️  Users will need to right-click → Open to bypass Gatekeeper"
+            exit 0
+          fi
+
+          echo "📝 Notarizing app with Apple..."
+
+          # Create a zip for notarization
+          ditto -c -k --keepParent dist/Dictator.app dist/Dictator.zip
+
+          # Submit for notarization
+          xcrun notarytool submit dist/Dictator.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the notarization ticket to the app
+          xcrun stapler staple dist/Dictator.app
+
+          echo "✅ App notarized and stapled"
+
       - name: Create DMG (for releases)
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
