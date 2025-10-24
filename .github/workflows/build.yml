@@ -1,0 +1,85 @@
+name: Build macOS App
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Dictator.app
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install py2app
+
+      - name: Build .app bundle
+        run: |
+          python setup.py py2app
+
+      - name: Verify .app bundle
+        run: |
+          ls -lh dist/
+          ls -la dist/Dictator.app/Contents/
+          cat dist/Dictator.app/Contents/Info.plist
+
+      - name: Create DMG (for releases)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # Create a temporary directory for DMG contents
+          mkdir -p dmg_tmp
+          cp -R dist/Dictator.app dmg_tmp/
+
+          # Create symbolic link to Applications folder
+          ln -s /Applications dmg_tmp/Applications
+
+          # Create DMG
+          hdiutil create -volname "Dictator" \
+            -srcfolder dmg_tmp \
+            -ov -format UDZO \
+            dist/Dictator.dmg
+
+          ls -lh dist/Dictator.dmg
+
+      - name: Upload .app as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dictator-macOS
+          path: dist/Dictator.app
+          retention-days: 30
+
+      - name: Upload DMG as artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dictator-DMG
+          path: dist/Dictator.dmg
+          retention-days: 90
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/Dictator.dmg
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

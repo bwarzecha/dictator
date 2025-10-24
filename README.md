@@ -56,12 +56,17 @@ The app is fully functional! Press Option+Space from anywhere to dictate text.
 - [x] Blazing fast: ~0.3-0.5 second transcription on Apple Silicon!
 
 
+### Completed Features ✅
+- [x] History window to view/copy past recordings
+- [x] Settings window for configuration
+- [x] LLM cleanup for improved transcription quality (AWS Bedrock)
+- [x] Packaging as standalone .app bundle
+- [x] Custom vocabulary support
+
 ### Planned 🔮
-- [ ] History window to view/copy past recordings
-- [ ] Settings window for configuration
-- [ ] LLM cleanup for improved transcription quality
-- [ ] Packaging as standalone .app bundle
 - [ ] Custom keyboard shortcuts
+- [ ] Multiple language support
+- [ ] App Store distribution
 
 
 ## Key Technical Challenges Solved
@@ -110,13 +115,38 @@ dictator/
 
 ## Quick Start
 
+### Option 1: Download Pre-built App (Recommended)
+
+1. Download `Dictator.dmg` from [Releases](https://github.com/yourusername/dictator/releases)
+2. Open the DMG and drag Dictator.app to Applications
+3. Launch Dictator from Applications
+4. Grant permissions when prompted (Accessibility, Microphone, Input Monitoring)
+5. Look for the ⚪ icon in your menubar
+6. Press **Option+Space** to start dictating!
+
+### Option 2: Build from Source
+
+```bash
+# 1. Install dependencies
+./setup.sh
+
+# 2. Build the .app bundle
+./build_app.sh
+
+# 3. Install to Applications
+cp -R dist/Dictator.app /Applications/
+
+# 4. Launch
+open /Applications/Dictator.app
+```
+
+### Option 3: Run from Terminal (Development)
+
 ```bash
 # 1. Install
 ./setup.sh
 
-# 2. Grant permissions (follow on-screen instructions)
-
-# 3. Run
+# 2. Run
 ./start.sh
 ```
 

@@ -3,6 +3,7 @@ rumps
 pynput
 pyobjc-framework-ApplicationServices
 pyobjc-framework-Cocoa
+PyQt6
 
 # Audio Recording
 sounddevice
@@ -11,8 +12,14 @@ numpy
 # Transcription
 pywhispercpp
 
+# LLM Correction
+boto3
+
 # Development & Testing
 pytest
 pytest-cov
 black
 mypy
+
+# Packaging
+py2app
