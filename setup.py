@@ -71,17 +71,6 @@ OPTIONS = {
     'semi_standalone': False,  # Include Python framework
 }
 
-# Add code signing options if identity is provided
-if CODESIGN_IDENTITY:
-    print(f"🔐 Code signing enabled: {CODESIGN_IDENTITY}")
-    OPTIONS.update({
-        'codesign_identity': CODESIGN_IDENTITY,
-        'codesign_options': 'runtime',  # Hardened runtime for notarization
-        'codesign_deep': True,  # Deep sign all embedded frameworks
-    })
-else:
-    print("⚠️  Code signing disabled (ad-hoc signing will be used)")
-
 setup(
     name='Dictator',
     app=APP,
@@ -89,3 +78,44 @@ setup(
     options={'py2app': OPTIONS},
     setup_requires=['py2app'],
 )
+
+# Sign the app after building if identity is provided
+if CODESIGN_IDENTITY and __name__ == '__main__':
+    import subprocess
+    import sys
+
+    # Only sign if we're actually building (not just installing)
+    if 'py2app' in sys.argv:
+        print(f"\n🔐 Code signing with: {CODESIGN_IDENTITY}")
+
+        app_path = 'dist/Dictator.app'
+
+        # Sign all frameworks and dylibs first (deep signing)
+        print("  → Signing embedded frameworks...")
+        subprocess.run([
+            'codesign',
+            '--force',
+            '--deep',
+            '--options', 'runtime',
+            '--sign', CODESIGN_IDENTITY,
+            '--timestamp',
+            app_path
+        ], check=True)
+
+        print("  ✅ Code signing complete!")
+
+        # Verify signature
+        print("\n  Verifying signature...")
+        result = subprocess.run([
+            'codesign',
+            '--verify',
+            '--deep',
+            '--strict',
+            '--verbose=2',
+            app_path
+        ], capture_output=True, text=True)
+
+        if result.returncode == 0:
+            print(f"  ✅ Signature verified: {app_path}")
+        else:
+            print(f"  ⚠️  Verification failed: {result.stderr}")
