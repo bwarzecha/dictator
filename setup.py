@@ -92,7 +92,7 @@ if CODESIGN_IDENTITY and __name__ == '__main__':
 
         # Sign all frameworks and dylibs first (deep signing)
         print("  → Signing embedded frameworks...")
-        subprocess.run([
+        result = subprocess.run([
             'codesign',
             '--force',
             '--deep',
@@ -100,22 +100,28 @@ if CODESIGN_IDENTITY and __name__ == '__main__':
             '--sign', CODESIGN_IDENTITY,
             '--timestamp',
             app_path
-        ], check=True)
-
-        print("  ✅ Code signing complete!")
-
-        # Verify signature
-        print("\n  Verifying signature...")
-        result = subprocess.run([
-            'codesign',
-            '--verify',
-            '--deep',
-            '--strict',
-            '--verbose=2',
-            app_path
         ], capture_output=True, text=True)
 
         if result.returncode == 0:
-            print(f"  ✅ Signature verified: {app_path}")
+            print("  ✅ Code signing complete!")
+
+            # Verify signature
+            print("\n  Verifying signature...")
+            verify_result = subprocess.run([
+                'codesign',
+                '--verify',
+                '--deep',
+                '--strict',
+                '--verbose=2',
+                app_path
+            ], capture_output=True, text=True)
+
+            if verify_result.returncode == 0:
+                print(f"  ✅ Signature verified: {app_path}")
+            else:
+                print(f"  ⚠️  Verification failed: {verify_result.stderr}")
         else:
-            print(f"  ⚠️  Verification failed: {result.stderr}")
+            print(f"  ⚠️  Code signing failed (identity may not be available in keychain)")
+            print(f"  Error: {result.stderr}")
+            print(f"  → App will be ad-hoc signed instead")
+            # Don't fail the build, just continue without proper signing
