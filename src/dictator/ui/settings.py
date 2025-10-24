@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
 
 from dictator.models import AppConfig
 from dictator.services.llm_corrector import BedrockLLMProvider
+from dictator.services.model_manager import WhisperModelManager
+from dictator.ui.model_download_dialog import ModelDownloadDialog
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,7 @@ class SettingsWindow(QWidget):
         """
         super().__init__()
         self.config = config
+        self.model_manager = WhisperModelManager()
         self.init_ui()
 
     def init_ui(self):
@@ -69,25 +72,49 @@ class SettingsWindow(QWidget):
         group = QGroupBox("Whisper Transcription")
         layout = QFormLayout()
 
-        # Model selection
+        # Model selection with enhanced display
+        model_layout = QHBoxLayout()
+
         self.whisper_model_combo = QComboBox()
-        self.whisper_model_combo.addItems([
-            "tiny",
-            "base",
-            "small",
-            "medium",
-            "large-v3-turbo",
-            "large-v3",
-        ])
-        self.whisper_model_combo.setCurrentText(self.config.whisper_model)
+        self.whisper_model_combo.setMinimumWidth(300)
+
+        # Populate with models showing sizes and status
+        all_models = self.model_manager.get_all_models()
+        for model_info in all_models:
+            is_downloaded = self.model_manager.is_model_downloaded(model_info.name)
+            status_icon = "✓" if is_downloaded else "○"
+            display_text = f"{status_icon} {model_info.display_name} - {model_info.description}"
+            self.whisper_model_combo.addItem(display_text, model_info.name)
+
+        # Set current selection
+        current_index = self._find_model_index(self.config.whisper_model)
+        if current_index >= 0:
+            self.whisper_model_combo.setCurrentIndex(current_index)
+
         self.whisper_model_combo.setEditable(True)
-        layout.addRow("Model:", self.whisper_model_combo)
+        model_layout.addWidget(self.whisper_model_combo)
+
+        # Download button
+        self.download_model_button = QPushButton("Download")
+        self.download_model_button.clicked.connect(self._download_selected_model)
+        self.download_model_button.setToolTip("Download the selected model")
+        model_layout.addWidget(self.download_model_button)
+
+        layout.addRow("Model:", model_layout)
+
+        # Model status info
+        self.model_status_label = QLabel()
+        self.model_status_label.setWordWrap(True)
+        self._update_model_status()
+        self.whisper_model_combo.currentIndexChanged.connect(self._update_model_status)
+        layout.addRow("Status:", self.model_status_label)
 
         # Thread count
         self.whisper_threads_spin = QSpinBox()
         self.whisper_threads_spin.setMinimum(1)
         self.whisper_threads_spin.setMaximum(32)
         self.whisper_threads_spin.setValue(self.config.whisper_threads)
+        self.whisper_threads_spin.setToolTip("More threads = faster transcription (uses more CPU)")
         layout.addRow("Threads:", self.whisper_threads_spin)
 
         # Custom Vocabulary
@@ -104,6 +131,129 @@ class SettingsWindow(QWidget):
 
         group.setLayout(layout)
         return group
+
+    def _find_model_index(self, model_name: str) -> int:
+        """Find index of model in combo box by name.
+
+        Args:
+            model_name: Name of model to find
+
+        Returns:
+            Index in combo box, or -1 if not found
+        """
+        for i in range(self.whisper_model_combo.count()):
+            if self.whisper_model_combo.itemData(i) == model_name:
+                return i
+        return -1
+
+    def _get_selected_model_name(self) -> str:
+        """Get the currently selected model name.
+
+        Returns:
+            Model name (e.g., "small", "large-v3")
+        """
+        # Try to get from itemData first
+        index = self.whisper_model_combo.currentIndex()
+        if index >= 0:
+            model_name = self.whisper_model_combo.itemData(index)
+            if model_name:
+                return model_name
+
+        # Fallback: parse from text (for custom entries)
+        text = self.whisper_model_combo.currentText().strip()
+        # Extract model name from display text (after status icon)
+        if text.startswith("✓ ") or text.startswith("○ "):
+            text = text[2:].strip()
+
+        # Extract just the model name (before size in parentheses)
+        if " (" in text:
+            text = text.split(" (")[0].strip()
+
+        # Extract before description dash
+        if " - " in text:
+            text = text.split(" - ")[0].strip()
+
+        return text
+
+    def _update_model_status(self):
+        """Update the model status label."""
+        model_name = self._get_selected_model_name()
+        model_info = self.model_manager.get_model_info(model_name)
+        is_downloaded = self.model_manager.is_model_downloaded(model_name)
+
+        if is_downloaded:
+            status = "✓ <b>Downloaded</b> - Ready to use"
+            self.download_model_button.setEnabled(False)
+            self.download_model_button.setText("Downloaded")
+        else:
+            if model_info:
+                available_space = self.model_manager.get_available_disk_space()
+                space_needed = model_info.size_mb
+
+                if available_space < space_needed:
+                    status = f"⚠ <b>Not downloaded</b> - Insufficient disk space (need {space_needed}MB, have {available_space}MB)"
+                    self.download_model_button.setEnabled(False)
+                else:
+                    status = f"○ <b>Not downloaded</b> - Will download {model_info.size_mb}MB on first use or click Download"
+                    self.download_model_button.setEnabled(True)
+                    self.download_model_button.setText("Download")
+            else:
+                status = "○ <b>Not downloaded</b> - Custom model"
+                self.download_model_button.setEnabled(True)
+                self.download_model_button.setText("Download")
+
+        self.model_status_label.setText(status)
+
+    def _download_selected_model(self):
+        """Download the currently selected model."""
+        model_name = self._get_selected_model_name()
+        model_info = self.model_manager.get_model_info(model_name)
+
+        logger.info("User requested model download", extra={"model": model_name})
+
+        # Show download dialog
+        dialog = ModelDownloadDialog(
+            model_name=model_name,
+            model_info=model_info,
+            parent=self,
+        )
+
+        # Start download
+        dialog.start_download()
+
+        # Show dialog (modal)
+        result = dialog.exec()
+
+        # Update status after dialog closes
+        self._update_model_status()
+
+        # Refresh combo box to update checkmarks
+        current_model = self._get_selected_model_name()
+        self._refresh_model_combo()
+
+        # Restore selection
+        new_index = self._find_model_index(current_model)
+        if new_index >= 0:
+            self.whisper_model_combo.setCurrentIndex(new_index)
+
+    def _refresh_model_combo(self):
+        """Refresh the model combo box with updated download status."""
+        # Save current selection
+        current_model = self._get_selected_model_name()
+
+        # Clear and repopulate
+        self.whisper_model_combo.clear()
+        all_models = self.model_manager.get_all_models()
+        for model_info in all_models:
+            is_downloaded = self.model_manager.is_model_downloaded(model_info.name)
+            status_icon = "✓" if is_downloaded else "○"
+            display_text = f"{status_icon} {model_info.display_name} - {model_info.description}"
+            self.whisper_model_combo.addItem(display_text, model_info.name)
+
+        # Restore selection
+        new_index = self._find_model_index(current_model)
+        if new_index >= 0:
+            self.whisper_model_combo.setCurrentIndex(new_index)
 
     def _create_llm_settings(self) -> QGroupBox:
         """Create LLM correction settings group."""
@@ -264,10 +414,24 @@ class SettingsWindow(QWidget):
                 if word.strip()
             ]
 
+            # Get selected model name
+            selected_model = self._get_selected_model_name()
+
+            # Log what's being saved
+            logger.info(
+                "Saving settings",
+                extra={
+                    "whisper_model": selected_model,
+                    "whisper_threads": self.whisper_threads_spin.value(),
+                    "vocab_count": len(vocabulary),
+                    "llm_enabled": self.llm_enabled_checkbox.isChecked(),
+                }
+            )
+
             # Create updated config
             updated_config = AppConfig(
                 recordings_dir=self.config.recordings_dir,
-                whisper_model=self.whisper_model_combo.currentText().strip(),
+                whisper_model=selected_model,
                 whisper_threads=self.whisper_threads_spin.value(),
                 custom_vocabulary=vocabulary,
                 llm_correction_enabled=self.llm_enabled_checkbox.isChecked(),
@@ -277,6 +441,8 @@ class SettingsWindow(QWidget):
                 bedrock_region=self.bedrock_region_combo.currentText().strip(),
                 correction_prompt=self.correction_prompt_edit.toPlainText().strip(),
             )
+
+            logger.info(f"✓ Settings saved with Whisper model: {selected_model}")
 
             # Emit signal
             self.config_changed.emit(updated_config)

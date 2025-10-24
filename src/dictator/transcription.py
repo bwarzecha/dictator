@@ -4,7 +4,7 @@ Uses whisper.cpp for fast, local transcription.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 import logging
 from pywhispercpp.model import Model
 
@@ -22,6 +22,7 @@ class WhisperTranscriber:
         model_name: str = "large-v3-turbo",
         n_threads: int = 8,
         custom_vocabulary: Optional[list[str]] = None,
+        download_progress_callback: Optional[Callable[[str], None]] = None,
     ):
         """Initialize transcriber.
 
@@ -29,10 +30,12 @@ class WhisperTranscriber:
             model_name: Whisper model to use
             n_threads: Number of CPU threads for transcription
             custom_vocabulary: Optional list of custom words for better recognition
+            download_progress_callback: Optional callback for download progress messages
         """
         self.model_name = model_name
         self.n_threads = n_threads
         self.custom_vocabulary = custom_vocabulary or []
+        self.download_progress_callback = download_progress_callback
         self._model = None
 
     def load_model(self) -> None:
@@ -48,6 +51,16 @@ class WhisperTranscriber:
             "Loading Whisper model",
             extra={"model": self.model_name, "threads": self.n_threads},
         )
+
+        # Check if model needs downloading
+        from dictator.services.model_manager import WhisperModelManager
+
+        model_manager = WhisperModelManager()
+        if not model_manager.is_model_downloaded(self.model_name):
+            msg = f"Downloading model {self.model_name}..."
+            logger.info(msg)
+            if self.download_progress_callback:
+                self.download_progress_callback(msg)
 
         self._model = Model(self.model_name, n_threads=self.n_threads)
 
@@ -79,10 +92,13 @@ class WhisperTranscriber:
         logger.info(
             "Starting transcription",
             extra={
+                "model": self.model_name,
+                "threads": self.n_threads,
                 "audio_path": str(audio_path),
                 "vocab_count": len(self.custom_vocabulary),
             },
         )
+        logger.info(f"🎙️  Using Whisper model: {self.model_name} ({self.n_threads} threads)")
 
         # Transcribe with initial_prompt
         segments = self._model.transcribe(

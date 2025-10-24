@@ -331,11 +331,23 @@ class DictatorApp(rumps.App):
             if (new_config.whisper_model != self.transcriber.model_name or
                 new_config.whisper_threads != self.transcriber.n_threads or
                 new_config.custom_vocabulary != self.transcriber.custom_vocabulary):
-                logger.info("Reinitializing Whisper with new settings")
+                logger.info(
+                    "Whisper settings changed, reinitializing",
+                    extra={
+                        "old_model": self.transcriber.model_name,
+                        "new_model": new_config.whisper_model,
+                        "old_threads": self.transcriber.n_threads,
+                        "new_threads": new_config.whisper_threads,
+                        "vocab_count": len(new_config.custom_vocabulary),
+                    }
+                )
                 self.transcriber = WhisperTranscriber(
                     model_name=new_config.whisper_model,
                     n_threads=new_config.whisper_threads,
                     custom_vocabulary=new_config.custom_vocabulary,
+                )
+                logger.info(
+                    f"✓ Whisper transcriber initialized with model: {new_config.whisper_model}"
                 )
                 threading.Thread(target=self.transcriber.load_model, daemon=True).start()
 
