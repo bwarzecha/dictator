@@ -32,8 +32,42 @@ jobs:
           pip install -r requirements.txt
           pip install py2app
 
-      - name: Build .app bundle
+      - name: Import Code Signing Certificate
+        if: startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_CODE_SIGNING == 'true'
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || 'temporary-password' }}
         run: |
+          # Decode certificate
+          echo "$CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+
+          # Import certificate
+          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+
+          # Allow codesign to use the keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+          # Clean up certificate file
+          rm certificate.p12
+
+          echo "✅ Code signing certificate imported"
+
+      - name: Build .app bundle
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: |
+          if [ -n "$CODESIGN_IDENTITY" ]; then
+            echo "🔐 Building with code signing: $CODESIGN_IDENTITY"
+            export CODESIGN_IDENTITY="$CODESIGN_IDENTITY"
+          else
+            echo "⚠️  Building without code signing (ad-hoc)"
+          fi
           python setup.py py2app
 
       - name: Verify .app bundle
@@ -41,6 +75,14 @@ jobs:
           ls -lh dist/
           ls -la dist/Dictator.app/Contents/
           cat dist/Dictator.app/Contents/Info.plist
+
+          # Verify code signature if signed
+          if codesign -dv dist/Dictator.app 2>/dev/null; then
+            echo "✅ App is code signed"
+            codesign --verify --deep --strict --verbose=2 dist/Dictator.app
+          else
+            echo "⚠️  App is ad-hoc signed (no Developer ID)"
+          fi
 
       - name: Create DMG (for releases)
         if: startsWith(github.ref, 'refs/tags/v')

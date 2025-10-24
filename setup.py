@@ -7,13 +7,19 @@ This creates a standalone macOS .app bundle that can be:
 - Distributed to other users
 
 Usage:
-    python setup.py py2app
+    python setup.py py2app                    # Ad-hoc signing
+    CODESIGN_IDENTITY="..." python setup.py py2app  # With code signing
 """
 
 from setuptools import setup
+import os
 
 APP = ['run_dictator.py']
 DATA_FILES = []
+
+# Get code signing identity from environment (optional)
+CODESIGN_IDENTITY = os.environ.get('CODESIGN_IDENTITY')
+
 OPTIONS = {
     'argv_emulation': False,  # Don't emulate argv for drag-and-drop
     'iconfile': 'icon.icns',  # Custom app icon
@@ -64,6 +70,17 @@ OPTIONS = {
     'strip': False,  # Keep symbols for debugging
     'semi_standalone': False,  # Include Python framework
 }
+
+# Add code signing options if identity is provided
+if CODESIGN_IDENTITY:
+    print(f"🔐 Code signing enabled: {CODESIGN_IDENTITY}")
+    OPTIONS.update({
+        'codesign_identity': CODESIGN_IDENTITY,
+        'codesign_options': 'runtime',  # Hardened runtime for notarization
+        'codesign_deep': True,  # Deep sign all embedded frameworks
+    })
+else:
+    print("⚠️  Code signing disabled (ad-hoc signing will be used)")
 
 setup(
     name='Dictator',
