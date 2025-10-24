@@ -59,12 +59,11 @@ jobs:
           echo "✅ Code signing certificate imported"
 
       - name: Build .app bundle
-        env:
-          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
         run: |
-          if [ -n "$CODESIGN_IDENTITY" ]; then
+          # Only set identity for release builds where cert was imported
+          if [[ "${{ github.ref }}" == refs/tags/v* ]] && [[ "${{ vars.ENABLE_CODE_SIGNING }}" == "true" ]]; then
+            export CODESIGN_IDENTITY="${{ secrets.CODESIGN_IDENTITY }}"
             echo "🔐 Building with code signing: $CODESIGN_IDENTITY"
-            export CODESIGN_IDENTITY="$CODESIGN_IDENTITY"
           else
             echo "⚠️  Building without code signing (ad-hoc)"
           fi
