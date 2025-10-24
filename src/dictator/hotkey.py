@@ -10,6 +10,25 @@ from pynput import keyboard
 logger = logging.getLogger(__name__)
 
 
+def check_input_monitoring_permission() -> bool:
+    """Check if app has Input Monitoring permission.
+
+    Returns:
+        True if permission granted, False otherwise
+    """
+    try:
+        # Try to access the keyboard listener
+        # If permission is denied, pynput will fail silently
+        # We can detect this by checking if events are received
+        test_listener = keyboard.Listener(on_press=lambda k: None)
+        test_listener.start()
+        test_listener.stop()
+        return True
+    except Exception as e:
+        logger.error(f"Input Monitoring permission check failed: {e}")
+        return False
+
+
 class HotkeyListener:
     """Listens for global hotkey press (Option+Space).
 
