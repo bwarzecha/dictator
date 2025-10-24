@@ -23,6 +23,7 @@ CODESIGN_IDENTITY = os.environ.get('CODESIGN_IDENTITY')
 OPTIONS = {
     'argv_emulation': False,  # Don't emulate argv for drag-and-drop
     'iconfile': 'icon.icns',  # Custom app icon
+    'compressed': False,  # Don't create python312.zip - needed for notarization
     'plist': {
         'CFBundleName': 'Dictator',
         'CFBundleDisplayName': 'Dictator',
@@ -40,6 +41,7 @@ OPTIONS = {
         'pynput',
         'sounddevice',
         'numpy',
+        'pydub',
         'pywhispercpp',
         'PyQt6',
         'dictator',
@@ -59,7 +61,10 @@ OPTIONS = {
         'dictator.hotkey',
         'dictator.ui.history',
         'dictator.ui.settings',
+        'dictator.ui.file_processor',
         'dictator.services.llm_corrector',
+        'dictator.services.audio_processor',
+        'dictator.services.audio_converter',
     ],
     'excludes': [
         'matplotlib',  # Don't need plotting
@@ -83,6 +88,7 @@ setup(
 if CODESIGN_IDENTITY and __name__ == '__main__':
     import subprocess
     import sys
+    import glob
 
     # Only sign if we're actually building (not just installing)
     if 'py2app' in sys.argv:
@@ -90,17 +96,48 @@ if CODESIGN_IDENTITY and __name__ == '__main__':
 
         app_path = 'dist/Dictator.app'
 
-        # Sign all frameworks and dylibs first (deep signing)
-        print("  → Signing embedded frameworks...")
-        result = subprocess.run([
+        # Sign options for all binaries
+        sign_opts = [
             'codesign',
             '--force',
-            '--deep',
             '--options', 'runtime',
-            '--sign', CODESIGN_IDENTITY,
             '--timestamp',
-            app_path
-        ], capture_output=True, text=True)
+            '--sign', CODESIGN_IDENTITY
+        ]
+
+        # Find all .so and .dylib files
+        binaries = []
+        binaries.extend(glob.glob(f'{app_path}/**/*.so', recursive=True))
+        binaries.extend(glob.glob(f'{app_path}/**/*.dylib', recursive=True))
+
+        print(f"  → Found {len(binaries)} binaries to sign")
+
+        # Sign each binary individually
+        for i, binary in enumerate(binaries, 1):
+            print(f"  [{i}/{len(binaries)}] Signing: {os.path.basename(binary)}")
+            result = subprocess.run(
+                sign_opts + [binary],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode != 0 and 'is already signed' not in result.stderr:
+                print(f"    ⚠️  Warning: {result.stderr.strip()}")
+
+        # Sign frameworks if they exist
+        frameworks = glob.glob(f'{app_path}/Contents/Frameworks/*.framework')
+        if frameworks:
+            print(f"  → Signing {len(frameworks)} frameworks")
+            for framework in frameworks:
+                print(f"    Signing: {os.path.basename(framework)}")
+                subprocess.run(sign_opts + [framework], capture_output=True)
+
+        # Finally sign the main app bundle
+        print("  → Signing main app bundle...")
+        result = subprocess.run(
+            sign_opts + [app_path],
+            capture_output=True,
+            text=True
+        )
 
         if result.returncode == 0:
             print("  ✅ Code signing complete!")
@@ -121,7 +158,7 @@ if CODESIGN_IDENTITY and __name__ == '__main__':
             else:
                 print(f"  ⚠️  Verification failed: {verify_result.stderr}")
         else:
-            print(f"  ⚠️  Code signing failed (identity may not be available in keychain)")
+            print(f"  ⚠️  Code signing failed")
             print(f"  Error: {result.stderr}")
             print(f"  → App will be ad-hoc signed instead")
             # Don't fail the build, just continue without proper signing

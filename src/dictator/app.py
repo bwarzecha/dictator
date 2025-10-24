@@ -16,10 +16,12 @@ from dictator.audio import AudioRecorder
 from dictator.transcription import WhisperTranscriber
 from dictator.insertion import TextInserter
 from dictator.storage import RecordingStorage
-from dictator.hotkey import HotkeyListener
+from dictator.hotkey import HotkeyListener, check_input_monitoring_permission
 from dictator.ui.history import HistoryWindow
 from dictator.ui.settings import SettingsWindow
+from dictator.ui.file_processor import FileProcessorWindow
 from dictator.services.llm_corrector import BedrockLLMProvider
+from dictator.services.audio_processor import AudioProcessor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,7 +50,7 @@ class DictatorApp(rumps.App):
 
     def __init__(self):
         """Initialize application and all components."""
-        super().__init__("⚪", icon=None, quit_button=None)
+        super().__init__("🟢", icon=None, quit_button=None)
 
         config_path = Path.home() / ".dictator" / "config.json"
         self.config = AppConfig.load(config_path)
@@ -78,15 +80,42 @@ class DictatorApp(rumps.App):
 
         self.history_window = None  # Lazy initialization
         self.settings_window = None  # Lazy initialization
+        self.file_processor_window = None  # Lazy initialization
         self.config_path = config_path
+
+        # Create audio processor for shared pipeline
+        self.audio_processor = AudioProcessor(
+            transcriber=self.transcriber,
+            storage=self.storage,
+            llm_corrector=self.llm_corrector,
+            inserter=self.inserter,
+        )
 
         self.status_item = rumps.MenuItem("Status: Ready")
         self.history_item = rumps.MenuItem("Show History")
+        self.process_file_item = rumps.MenuItem("Process Audio File...")
         self.settings_item = rumps.MenuItem("Settings...")
         self.quit_item = rumps.MenuItem("Quit Dictator")
-        self.menu = [self.status_item, None, self.history_item, self.settings_item, None, self.quit_item]
+        self.menu = [
+            self.status_item,
+            None,
+            self.history_item,
+            self.process_file_item,
+            self.settings_item,
+            None,
+            self.quit_item,
+        ]
 
         self.duration_timer = None
+
+        # Check Input Monitoring permission before starting hotkey listener
+        if not check_input_monitoring_permission():
+            logger.warning("Input Monitoring permission not granted")
+            safe_notification(
+                "Permission Required",
+                "",
+                "Grant Input Monitoring permission in System Settings → Privacy & Security to enable hotkey (Option+Space)",
+            )
 
         self.hotkey = HotkeyListener(callback=self.toggle_recording)
         self.hotkey.start()
@@ -161,53 +190,36 @@ class DictatorApp(rumps.App):
             duration: Recording duration in seconds
         """
         try:
-            raw_text = self.transcriber.transcribe(audio_path)
-            cleaned_text = raw_text
-            correction_failed = False
+            # Use audio processor for common pipeline
+            result = self.audio_processor.process(
+                audio_path, duration, progress_callback=self._update_status
+            )
 
-            # Apply LLM correction if enabled
-            if self.config.llm_correction_enabled and self.llm_corrector:
-                try:
-                    self._update_status("Correcting...")
-                    logger.info("Applying LLM correction to transcript")
-                    cleaned_text = self.llm_corrector.correct(raw_text)
-                    logger.info("LLM correction successful")
-                except Exception as e:
-                    logger.error(f"LLM correction failed: {e}")
-                    correction_failed = True
-                    # Show notification but continue with raw text
+            # Handle insertion result
+            if result.inserted:
+                notification_text = result.cleaned_text
+                if result.correction_failed:
+                    notification_text += " (uncorrected)"
                     safe_notification(
-                        "Correction Failed",
+                        "Text Inserted (Correction Failed)",
                         "",
                         "Using raw transcript. Check AWS settings and try again.",
                     )
-
-            # Save both raw and cleaned versions
-            recording = self.storage.save(
-                audio_path,
-                transcription=raw_text,
-                cleaned_transcription=cleaned_text,
-                duration=duration,
-            )
-
-            # Insert the cleaned text
-            success = self.inserter.insert_text(cleaned_text)
-
-            if success:
-                notification_text = cleaned_text if not correction_failed else f"{cleaned_text} (uncorrected)"
-                safe_notification(
-                    "Text Inserted",
-                    "",
-                    notification_text[:100] + ("..." if len(notification_text) > 100 else ""),
-                )
+                else:
+                    safe_notification(
+                        "Text Inserted",
+                        "",
+                        notification_text[:100]
+                        + ("..." if len(notification_text) > 100 else ""),
+                    )
             else:
                 logger.info("Text insertion failed, copying to clipboard")
                 # Copy to clipboard on main thread and show notification
                 AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
-                    lambda: self._copy_and_notify(cleaned_text)
+                    lambda: self._copy_and_notify(result.cleaned_text)
                 )
 
-            logger.info(f"Transcription complete: {len(cleaned_text)} chars")
+            logger.info(f"Transcription complete: {len(result.cleaned_text)} chars")
 
         except FileNotFoundError:
             logger.error("Audio file not found")
@@ -260,6 +272,17 @@ class DictatorApp(rumps.App):
         self.history_window.raise_()
         self.history_window.activateWindow()
         logger.info("History window opened")
+
+    @rumps.clicked("Process Audio File...")
+    def show_file_processor(self, _):
+        """Handle process audio file menu item."""
+        if self.file_processor_window is None:
+            self.file_processor_window = FileProcessorWindow(self.audio_processor)
+
+        self.file_processor_window.show()
+        self.file_processor_window.raise_()
+        self.file_processor_window.activateWindow()
+        logger.info("File processor window opened")
 
     @rumps.clicked("Settings...")
     def show_settings(self, _):
@@ -322,6 +345,9 @@ class DictatorApp(rumps.App):
             else:
                 self.llm_corrector = None
                 logger.info("LLM correction disabled")
+
+            # Update audio processor with new corrector
+            self.audio_processor.llm_corrector = self.llm_corrector
 
             # Update history window if it exists
             if self.history_window:

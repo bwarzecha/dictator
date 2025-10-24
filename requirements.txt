@@ -5,9 +5,10 @@ pyobjc-framework-ApplicationServices
 pyobjc-framework-Cocoa
 PyQt6
 
-# Audio Recording
+# Audio Recording & Conversion
 sounddevice
 numpy
+pydub
 
 # Transcription
 pywhispercpp
