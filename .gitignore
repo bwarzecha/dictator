@@ -50,6 +50,9 @@ dmypy.json
 # Logs
 *.log
 
+# Test scripts
+test_*.py
+
 # Experimental/POC directory (local only - contains failed attempts and research)
 poc/
 

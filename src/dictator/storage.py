@@ -4,7 +4,7 @@ Manages saving and loading recordings and metadata.
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import json
 import logging
@@ -34,13 +34,20 @@ class RecordingStorage:
         """Create recordings directory if it doesn't exist."""
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
 
-    def save(self, audio_path: Path, transcription: str, duration: float) -> Recording:
+    def save(
+        self,
+        audio_path: Path,
+        transcription: str,
+        duration: float,
+        cleaned_transcription: Optional[str] = None,
+    ) -> Recording:
         """Save a new recording.
 
         Args:
             audio_path: Path to audio file
-            transcription: Transcribed text
+            transcription: Raw transcribed text from Whisper
             duration: Recording length in seconds
+            cleaned_transcription: Optional LLM-cleaned version
 
         Returns:
             The created Recording object
@@ -50,6 +57,7 @@ class RecordingStorage:
             timestamp=datetime.now(),
             duration=duration,
             transcription=transcription,
+            cleaned_transcription=cleaned_transcription,
         )
 
         recordings = self.load_all()
@@ -62,6 +70,7 @@ class RecordingStorage:
                 "audio_path": str(audio_path),
                 "duration": duration,
                 "transcription_length": len(transcription),
+                "cleaned": cleaned_transcription is not None,
             },
         )
 

@@ -30,6 +30,7 @@ dependencies = [
     "numpy>=1.24.0",
     "pywhispercpp>=1.0.0",
     "PyQt6>=6.10.0",
+    "boto3>=1.26.0",
 ]
 
 [project.optional-dependencies]

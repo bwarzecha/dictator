@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 import json
 
+from dictator.services.llm_corrector import DEFAULT_CORRECTION_PROMPT
+
 
 @dataclass
 class Recording:
@@ -57,14 +59,24 @@ class AppConfig:
         recordings_dir: Where to store audio files and metadata
         whisper_model: Model name for whisper.cpp
         whisper_threads: Number of threads for transcription
-        llm_enabled: Whether to use LLM for cleanup
-        anthropic_api_key: API key for Claude (if LLM enabled)
+        custom_vocabulary: List of custom words, names, technical terms
+        llm_correction_enabled: Whether to use LLM for transcript correction
+        llm_provider: LLM provider to use (currently only "bedrock")
+        aws_profile: AWS profile name (empty = default credential chain)
+        bedrock_model: Bedrock model identifier
+        bedrock_region: AWS region for Bedrock
+        correction_prompt: System prompt for LLM correction
     """
     recordings_dir: Path
     whisper_model: str = "large-v3-turbo"
     whisper_threads: int = 8
-    llm_enabled: bool = False
-    anthropic_api_key: Optional[str] = None
+    custom_vocabulary: list[str] = field(default_factory=list)
+    llm_correction_enabled: bool = False
+    llm_provider: str = "bedrock"
+    aws_profile: str = ""
+    bedrock_model: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    bedrock_region: str = "us-east-1"
+    correction_prompt: str = field(default_factory=lambda: DEFAULT_CORRECTION_PROMPT)
 
     @classmethod
     def default(cls) -> "AppConfig":
@@ -80,8 +92,13 @@ class AppConfig:
             "recordings_dir": str(self.recordings_dir),
             "whisper_model": self.whisper_model,
             "whisper_threads": self.whisper_threads,
-            "llm_enabled": self.llm_enabled,
-            "anthropic_api_key": self.anthropic_api_key,
+            "custom_vocabulary": self.custom_vocabulary,
+            "llm_correction_enabled": self.llm_correction_enabled,
+            "llm_provider": self.llm_provider,
+            "aws_profile": self.aws_profile,
+            "bedrock_model": self.bedrock_model,
+            "bedrock_region": self.bedrock_region,
+            "correction_prompt": self.correction_prompt,
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -99,6 +116,11 @@ class AppConfig:
             recordings_dir=Path(data["recordings_dir"]),
             whisper_model=data.get("whisper_model", "large-v3-turbo"),
             whisper_threads=data.get("whisper_threads", 8),
-            llm_enabled=data.get("llm_enabled", False),
-            anthropic_api_key=data.get("anthropic_api_key"),
+            custom_vocabulary=data.get("custom_vocabulary", []),
+            llm_correction_enabled=data.get("llm_correction_enabled", False),
+            llm_provider=data.get("llm_provider", "bedrock"),
+            aws_profile=data.get("aws_profile", ""),
+            bedrock_model=data.get("bedrock_model", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+            bedrock_region=data.get("bedrock_region", "us-east-1"),
+            correction_prompt=data.get("correction_prompt", DEFAULT_CORRECTION_PROMPT),
         )

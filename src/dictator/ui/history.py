@@ -5,14 +5,17 @@ Shows recordings in a table with copy buttons.
 
 import logging
 from datetime import datetime
+from typing import Optional
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QApplication
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QApplication,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt
 
 from dictator.storage import RecordingStorage
+from dictator.services.llm_corrector import LLMCorrector
 
 logger = logging.getLogger(__name__)
 
@@ -20,16 +23,18 @@ logger = logging.getLogger(__name__)
 class HistoryWindow(QMainWindow):
     """Qt-based history window with table layout."""
 
-    def __init__(self, storage: RecordingStorage):
+    def __init__(self, storage: RecordingStorage, llm_corrector: Optional[LLMCorrector] = None):
         """Initialize history window.
 
         Args:
             storage: RecordingStorage instance
+            llm_corrector: Optional LLM corrector for re-running corrections
         """
         super().__init__()
         self.storage = storage
+        self.llm_corrector = llm_corrector
         self.setWindowTitle("Dictator History")
-        self.setGeometry(100, 100, 900, 600)
+        self.setGeometry(100, 100, 1000, 600)
 
         # Create main widget and layout
         main_widget = QWidget()
@@ -39,8 +44,8 @@ class HistoryWindow(QMainWindow):
 
         # Create table
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Time", "Recording", ""])
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Time", "Recording", "Status", ""])
 
         # Configure table
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -53,8 +58,9 @@ class HistoryWindow(QMainWindow):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(2, 100)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(3, 180)
 
         # Enable word wrap
         self.table.setWordWrap(True)
@@ -91,27 +97,55 @@ class HistoryWindow(QMainWindow):
             time_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row, 0, time_item)
 
-            # Recording text column (word-wrapped)
-            text_item = QTableWidgetItem(rec.transcription)
+            # Recording text column - show cleaned version if available
+            display_text = rec.cleaned_transcription if rec.cleaned_transcription else rec.transcription
+            text_item = QTableWidgetItem(display_text)
             text_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row, 1, text_item)
 
-            # Copy button - centered in a container to prevent stretching
+            # Status column
+            if rec.cleaned_transcription:
+                status_item = QTableWidgetItem("✓ Corrected")
+            else:
+                status_item = QTableWidgetItem("Raw")
+            status_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.table.setItem(row, 2, status_item)
+
+            # Action buttons - centered in a container
             button_container = QWidget()
-            button_layout = QVBoxLayout(button_container)
+            button_layout = QHBoxLayout(button_container)
             button_layout.setContentsMargins(5, 5, 5, 5)
             button_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            button_layout.setSpacing(5)
 
-            copy_btn = QPushButton("📋 Copy")
-            copy_btn.setFixedHeight(30)
-            copy_btn.clicked.connect(lambda checked, text=rec.transcription: self._copy_to_clipboard(text))
-
+            copy_btn = QPushButton("📋")
+            copy_btn.setFixedSize(35, 30)
+            copy_btn.setToolTip("Copy to clipboard")
+            copy_btn.clicked.connect(lambda checked, text=display_text: self._copy_to_clipboard(text))
             button_layout.addWidget(copy_btn)
+
+            # Add re-run correction button if LLM corrector is available
+            if self.llm_corrector:
+                rerun_btn = QPushButton("⟳")
+                rerun_btn.setFixedSize(35, 30)
+                rerun_btn.setToolTip("Re-run LLM correction")
+                rerun_btn.clicked.connect(lambda checked, r=rec: self._rerun_correction(r))
+                button_layout.addWidget(rerun_btn)
+
             button_layout.addStretch()
 
-            self.table.setCellWidget(row, 2, button_container)
+            self.table.setCellWidget(row, 3, button_container)
 
         logger.info(f"Loaded {len(recordings)} recordings into history window")
+
+    def set_llm_corrector(self, corrector: Optional[LLMCorrector]):
+        """Update the LLM corrector and reload recordings.
+
+        Args:
+            corrector: New LLM corrector instance
+        """
+        self.llm_corrector = corrector
+        self.load_recordings()
 
     def _copy_to_clipboard(self, text: str):
         """Copy text to clipboard.
@@ -122,6 +156,54 @@ class HistoryWindow(QMainWindow):
         clipboard = QApplication.clipboard()
         clipboard.setText(text)
         logger.info(f"Copied to clipboard: {text[:50]}...")
+
+    def _rerun_correction(self, recording):
+        """Re-run LLM correction on a recording.
+
+        Args:
+            recording: Recording object to correct
+        """
+        if not self.llm_corrector:
+            QMessageBox.warning(
+                self,
+                "No LLM Corrector",
+                "LLM correction is not enabled. Please enable it in Settings.",
+            )
+            return
+
+        try:
+            # Show progress
+            QMessageBox.information(
+                self,
+                "Running Correction",
+                "Correcting transcript...\n\nThis may take a few seconds.",
+            )
+
+            # Run correction
+            cleaned_text = self.llm_corrector.correct(recording.transcription)
+
+            # Update recording
+            recording.cleaned_transcription = cleaned_text
+            self.storage.update(recording)
+
+            # Reload UI
+            self.load_recordings()
+
+            QMessageBox.information(
+                self,
+                "Correction Complete",
+                "Transcript has been corrected successfully!",
+            )
+
+            logger.info(f"Re-ran correction for recording: {recording.audio_path}")
+
+        except Exception as e:
+            logger.error(f"Failed to re-run correction: {e}")
+            QMessageBox.critical(
+                self,
+                "Correction Failed",
+                f"Failed to correct transcript:\n\n{str(e)}",
+            )
 
     def _format_timestamp(self, dt: datetime) -> str:
         """Format timestamp for display.

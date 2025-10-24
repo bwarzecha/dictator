@@ -18,6 +18,8 @@ from dictator.insertion import TextInserter
 from dictator.storage import RecordingStorage
 from dictator.hotkey import HotkeyListener
 from dictator.ui.history import HistoryWindow
+from dictator.ui.settings import SettingsWindow
+from dictator.services.llm_corrector import BedrockLLMProvider
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,9 +60,15 @@ class DictatorApp(rumps.App):
         self.transcriber = WhisperTranscriber(
             model_name=self.config.whisper_model,
             n_threads=self.config.whisper_threads,
+            custom_vocabulary=self.config.custom_vocabulary,
         )
         self.inserter = TextInserter()
         self.storage = RecordingStorage(self.config.recordings_dir)
+
+        # Initialize LLM corrector if enabled
+        self.llm_corrector = None
+        if self.config.llm_correction_enabled:
+            self._init_llm_corrector()
 
         # Initialize Qt application for history window
         self.qt_app = QApplication.instance()
@@ -69,11 +77,14 @@ class DictatorApp(rumps.App):
             self.qt_app = QApplication(sys.argv)
 
         self.history_window = None  # Lazy initialization
+        self.settings_window = None  # Lazy initialization
+        self.config_path = config_path
 
         self.status_item = rumps.MenuItem("Status: Ready")
         self.history_item = rumps.MenuItem("Show History")
+        self.settings_item = rumps.MenuItem("Settings...")
         self.quit_item = rumps.MenuItem("Quit Dictator")
-        self.menu = [self.status_item, None, self.history_item, None, self.quit_item]
+        self.menu = [self.status_item, None, self.history_item, self.settings_item, None, self.quit_item]
 
         self.duration_timer = None
 
@@ -150,26 +161,53 @@ class DictatorApp(rumps.App):
             duration: Recording duration in seconds
         """
         try:
-            text = self.transcriber.transcribe(audio_path)
+            raw_text = self.transcriber.transcribe(audio_path)
+            cleaned_text = raw_text
+            correction_failed = False
 
-            recording = self.storage.save(audio_path, text, duration)
+            # Apply LLM correction if enabled
+            if self.config.llm_correction_enabled and self.llm_corrector:
+                try:
+                    self._update_status("Correcting...")
+                    logger.info("Applying LLM correction to transcript")
+                    cleaned_text = self.llm_corrector.correct(raw_text)
+                    logger.info("LLM correction successful")
+                except Exception as e:
+                    logger.error(f"LLM correction failed: {e}")
+                    correction_failed = True
+                    # Show notification but continue with raw text
+                    safe_notification(
+                        "Correction Failed",
+                        "",
+                        "Using raw transcript. Check AWS settings and try again.",
+                    )
 
-            success = self.inserter.insert_text(text)
+            # Save both raw and cleaned versions
+            recording = self.storage.save(
+                audio_path,
+                transcription=raw_text,
+                cleaned_transcription=cleaned_text,
+                duration=duration,
+            )
+
+            # Insert the cleaned text
+            success = self.inserter.insert_text(cleaned_text)
 
             if success:
+                notification_text = cleaned_text if not correction_failed else f"{cleaned_text} (uncorrected)"
                 safe_notification(
                     "Text Inserted",
                     "",
-                    text[:100] + ("..." if len(text) > 100 else ""),
+                    notification_text[:100] + ("..." if len(notification_text) > 100 else ""),
                 )
             else:
                 logger.info("Text insertion failed, copying to clipboard")
                 # Copy to clipboard on main thread and show notification
                 AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
-                    lambda: self._copy_and_notify(text)
+                    lambda: self._copy_and_notify(cleaned_text)
                 )
 
-            logger.info(f"Transcription complete: {len(text)} chars")
+            logger.info(f"Transcription complete: {len(cleaned_text)} chars")
 
         except FileNotFoundError:
             logger.error("Audio file not found")
@@ -213,15 +251,86 @@ class DictatorApp(rumps.App):
     def show_history(self, _):
         """Handle show history menu item."""
         if self.history_window is None:
-            self.history_window = HistoryWindow(self.storage)
+            self.history_window = HistoryWindow(self.storage, self.llm_corrector)
         else:
-            # Reload recordings if window already exists
-            self.history_window.load_recordings()
+            # Update LLM corrector and reload recordings
+            self.history_window.set_llm_corrector(self.llm_corrector)
 
         self.history_window.show()
         self.history_window.raise_()
         self.history_window.activateWindow()
         logger.info("History window opened")
+
+    @rumps.clicked("Settings...")
+    def show_settings(self, _):
+        """Handle settings menu item."""
+        if self.settings_window is None:
+            self.settings_window = SettingsWindow(self.config)
+            self.settings_window.config_changed.connect(self._update_config)
+
+        self.settings_window.show()
+        self.settings_window.raise_()
+        self.settings_window.activateWindow()
+        logger.info("Settings window opened")
+
+    def _init_llm_corrector(self):
+        """Initialize LLM corrector with current config."""
+        try:
+            if self.config.llm_provider == "bedrock":
+                logger.info("Initializing Bedrock LLM corrector")
+                self.llm_corrector = BedrockLLMProvider(
+                    model_id=self.config.bedrock_model,
+                    correction_prompt=self.config.correction_prompt,
+                    aws_profile=self.config.aws_profile if self.config.aws_profile else None,
+                    region=self.config.bedrock_region,
+                    custom_vocabulary=self.config.custom_vocabulary,
+                )
+                logger.info("LLM corrector initialized successfully")
+            else:
+                logger.warning(f"Unsupported LLM provider: {self.config.llm_provider}")
+                self.llm_corrector = None
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM corrector: {e}")
+            self.llm_corrector = None
+
+    def _update_config(self, new_config: AppConfig):
+        """Update application configuration.
+
+        Args:
+            new_config: New configuration to apply
+        """
+        try:
+            # Save config to disk
+            new_config.save(self.config_path)
+            self.config = new_config
+
+            # Update Whisper transcriber if model, threads, or vocabulary changed
+            if (new_config.whisper_model != self.transcriber.model_name or
+                new_config.whisper_threads != self.transcriber.n_threads or
+                new_config.custom_vocabulary != self.transcriber.custom_vocabulary):
+                logger.info("Reinitializing Whisper with new settings")
+                self.transcriber = WhisperTranscriber(
+                    model_name=new_config.whisper_model,
+                    n_threads=new_config.whisper_threads,
+                    custom_vocabulary=new_config.custom_vocabulary,
+                )
+                threading.Thread(target=self.transcriber.load_model, daemon=True).start()
+
+            # Reinitialize LLM corrector if settings changed
+            if new_config.llm_correction_enabled:
+                self._init_llm_corrector()
+            else:
+                self.llm_corrector = None
+                logger.info("LLM correction disabled")
+
+            # Update history window if it exists
+            if self.history_window:
+                self.history_window.set_llm_corrector(self.llm_corrector)
+
+            logger.info("Configuration updated successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to update configuration: {e}")
 
     @rumps.clicked("Quit Dictator")
     def quit_app(self, _):
