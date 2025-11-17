@@ -66,6 +66,9 @@ class AppConfig:
         bedrock_model: Bedrock model identifier
         bedrock_region: AWS region for Bedrock
         correction_prompt: System prompt for LLM correction
+        remove_silence_enabled: Whether to remove silence before processing
+        silence_threshold: RMS threshold for detecting silence (0-1)
+        min_silence_duration: Minimum silence duration to remove (seconds)
     """
     recordings_dir: Path
     whisper_model: str = "large-v3-turbo"
@@ -77,6 +80,9 @@ class AppConfig:
     bedrock_model: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     bedrock_region: str = "us-east-1"
     correction_prompt: str = field(default_factory=lambda: DEFAULT_CORRECTION_PROMPT)
+    remove_silence_enabled: bool = False  # Disabled by default for safety
+    silence_threshold: float = 0.01  # Same as voice detection threshold
+    min_silence_duration: float = 0.5  # Remove silence longer than 500ms
 
     @classmethod
     def default(cls) -> "AppConfig":
@@ -99,6 +105,9 @@ class AppConfig:
             "bedrock_model": self.bedrock_model,
             "bedrock_region": self.bedrock_region,
             "correction_prompt": self.correction_prompt,
+            "remove_silence_enabled": self.remove_silence_enabled,
+            "silence_threshold": self.silence_threshold,
+            "min_silence_duration": self.min_silence_duration,
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -123,4 +132,7 @@ class AppConfig:
             bedrock_model=data.get("bedrock_model", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
             bedrock_region=data.get("bedrock_region", "us-east-1"),
             correction_prompt=data.get("correction_prompt", DEFAULT_CORRECTION_PROMPT),
+            remove_silence_enabled=data.get("remove_silence_enabled", False),
+            silence_threshold=data.get("silence_threshold", 0.01),
+            min_silence_duration=data.get("min_silence_duration", 0.5),
         )

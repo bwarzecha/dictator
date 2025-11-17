@@ -57,6 +57,10 @@ class SettingsWindow(QWidget):
         whisper_group = self._create_whisper_settings()
         layout.addWidget(whisper_group)
 
+        # Silence Removal Settings
+        silence_group = self._create_silence_removal_settings()
+        layout.addWidget(silence_group)
+
         # LLM Correction Settings
         llm_group = self._create_llm_settings()
         layout.addWidget(llm_group)
@@ -131,6 +135,58 @@ class SettingsWindow(QWidget):
 
         group.setLayout(layout)
         return group
+
+    def _create_silence_removal_settings(self) -> QGroupBox:
+        """Create silence removal settings group."""
+        group = QGroupBox("Silence Removal (Experimental)")
+        layout = QFormLayout()
+
+        # Enable/disable checkbox
+        self.silence_removal_checkbox = QCheckBox("Remove silence from recordings")
+        self.silence_removal_checkbox.setChecked(self.config.remove_silence_enabled)
+        self.silence_removal_checkbox.setToolTip(
+            "Removes long pauses to speed up processing. May reduce accuracy slightly."
+        )
+        self.silence_removal_checkbox.toggled.connect(self._on_silence_removal_toggled)
+        layout.addRow(self.silence_removal_checkbox)
+
+        # Threshold setting
+        self.silence_threshold_spin = QSpinBox()
+        self.silence_threshold_spin.setMinimum(1)
+        self.silence_threshold_spin.setMaximum(100)
+        self.silence_threshold_spin.setValue(int(self.config.silence_threshold * 1000))
+        self.silence_threshold_spin.setSuffix(" (1/1000)")
+        self.silence_threshold_spin.setToolTip("Lower = more sensitive to quiet sounds")
+        self.silence_threshold_spin.setEnabled(self.config.remove_silence_enabled)
+        layout.addRow("Silence threshold:", self.silence_threshold_spin)
+
+        # Minimum duration setting
+        self.min_silence_duration_spin = QSpinBox()
+        self.min_silence_duration_spin.setMinimum(100)
+        self.min_silence_duration_spin.setMaximum(2000)
+        self.min_silence_duration_spin.setValue(int(self.config.min_silence_duration * 1000))
+        self.min_silence_duration_spin.setSingleStep(100)
+        self.min_silence_duration_spin.setSuffix(" ms")
+        self.min_silence_duration_spin.setToolTip("Minimum silence duration to remove")
+        self.min_silence_duration_spin.setEnabled(self.config.remove_silence_enabled)
+        layout.addRow("Min silence duration:", self.min_silence_duration_spin)
+
+        # Info label
+        info_label = QLabel(
+            "⚠️ Experimental: May speed up processing on slower machines.\n"
+            "Test with your typical recordings to ensure accuracy."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addRow(info_label)
+
+        group.setLayout(layout)
+        return group
+
+    def _on_silence_removal_toggled(self, checked: bool):
+        """Handle silence removal checkbox toggle."""
+        self.silence_threshold_spin.setEnabled(checked)
+        self.min_silence_duration_spin.setEnabled(checked)
 
     def _find_model_index(self, model_name: str) -> int:
         """Find index of model in combo box by name.
@@ -440,6 +496,9 @@ class SettingsWindow(QWidget):
                 bedrock_model=self.bedrock_model_edit.text().strip(),
                 bedrock_region=self.bedrock_region_combo.currentText().strip(),
                 correction_prompt=self.correction_prompt_edit.toPlainText().strip(),
+                remove_silence_enabled=self.silence_removal_checkbox.isChecked(),
+                silence_threshold=self.silence_threshold_spin.value() / 1000.0,
+                min_silence_duration=self.min_silence_duration_spin.value() / 1000.0,
             )
 
             logger.info(f"✓ Settings saved with Whisper model: {selected_model}")

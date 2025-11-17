@@ -22,6 +22,7 @@ from dictator.ui.settings import SettingsWindow
 from dictator.ui.file_processor import FileProcessorWindow
 from dictator.services.llm_corrector import BedrockLLMProvider
 from dictator.services.audio_processor import AudioProcessor
+from dictator.health_monitor import HealthMonitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +51,7 @@ class DictatorApp(rumps.App):
 
     def __init__(self):
         """Initialize application and all components."""
-        super().__init__("🟢", icon=None, quit_button=None)
+        super().__init__("🟢", icon=None, quit_button=None)  # Green = ready
 
         config_path = Path.home() / ".dictator" / "config.json"
         self.config = AppConfig.load(config_path)
@@ -58,7 +59,20 @@ class DictatorApp(rumps.App):
         self.audio = AudioRecorder(
             sample_rate=16000,
             recordings_dir=self.config.recordings_dir,
+            remove_silence=self.config.remove_silence_enabled,
+            silence_threshold=self.config.silence_threshold,
+            min_silence_duration=self.config.min_silence_duration,
         )
+
+        # Track silence detection state
+        self._silence_detected = False
+
+        # Set up silence detection callbacks for menubar warning
+        self.audio.set_silence_callback(self._on_prolonged_silence)
+        self.audio.set_voice_resumed_callback(self._on_voice_resumed)
+        # You can adjust the voice threshold if needed (default is 0.01)
+        # self.audio.set_voice_threshold(0.02)  # Increase if too sensitive
+
         self.transcriber = WhisperTranscriber(
             model_name=self.config.whisper_model,
             n_threads=self.config.whisper_threads,
@@ -92,12 +106,14 @@ class DictatorApp(rumps.App):
         )
 
         self.status_item = rumps.MenuItem("Status: Ready")
+        self.mic_check_item = rumps.MenuItem("Mic Check")
         self.history_item = rumps.MenuItem("Show History")
         self.process_file_item = rumps.MenuItem("Process Audio File...")
         self.settings_item = rumps.MenuItem("Settings...")
         self.quit_item = rumps.MenuItem("Quit Dictator")
         self.menu = [
             self.status_item,
+            self.mic_check_item,
             None,
             self.history_item,
             self.process_file_item,
@@ -106,7 +122,8 @@ class DictatorApp(rumps.App):
             self.quit_item,
         ]
 
-        self.duration_timer = None
+        self.mic_check_timer = None
+        self.volume_update_timer = None  # Timer for recording display updates
 
         # Check Input Monitoring permission before starting hotkey listener
         if not check_input_monitoring_permission():
@@ -119,6 +136,11 @@ class DictatorApp(rumps.App):
 
         self.hotkey = HotkeyListener(callback=self.toggle_recording)
         self.hotkey.start()
+
+        # Initialize health monitor
+        self.health_monitor = HealthMonitor()
+        self._register_health_monitoring()
+        self.health_monitor.start_monitoring(check_interval=5.0)
 
         threading.Thread(target=self.transcriber.load_model, daemon=True).start()
 
@@ -134,12 +156,16 @@ class DictatorApp(rumps.App):
     def _start_recording(self):
         """Start audio recording."""
         try:
+            # Reset silence detection state
+            self._silence_detected = False
+
             self.audio.start_recording()
-            self.title = "🔴"
+            self.title = "  0s ⚫"  # Start with seconds first, then black dot
             self._update_status("Recording...")
 
-            self.duration_timer = rumps.Timer(self._update_duration, 1)
-            self.duration_timer.start()
+            # Start combined timer for both duration and volume (updates 10 times per second)
+            self.volume_update_timer = rumps.Timer(self._update_recording_display, 0.1)
+            self.volume_update_timer.start()
 
             logger.info("Recording started")
 
@@ -155,13 +181,14 @@ class DictatorApp(rumps.App):
     def _stop_and_transcribe(self):
         """Stop recording and start transcription."""
         try:
-            if self.duration_timer:
-                self.duration_timer.stop()
-                self.duration_timer = None
+            # Stop the timer
+            if self.volume_update_timer:
+                self.volume_update_timer.stop()
+                self.volume_update_timer = None
 
             audio_path, duration = self.audio.stop_recording()
 
-            self.title = "🟡"
+            self.title = "🟡"  # Yellow for processing
             self._update_status("Transcribing...")
 
             threading.Thread(
@@ -179,7 +206,7 @@ class DictatorApp(rumps.App):
                 "",
                 f"Failed to stop: {e}",
             )
-            self.title = "⚪"
+            self.title = "🟢"  # Back to ready (green)
             self._update_status("Ready")
 
     def _transcribe_and_insert(self, audio_path: Path, duration: float):
@@ -240,14 +267,71 @@ class DictatorApp(rumps.App):
         finally:
             self._update_status("Ready")
 
-    def _update_duration(self, timer):
-        """Update menubar with current recording duration.
+    def _update_recording_display(self, timer):
+        """Update menubar with recording status (duration and volume indicator).
 
         Args:
             timer: rumps.Timer instance
         """
-        duration = self.audio.get_duration()
-        self.title = f"🔴 {duration:.1f}s"
+        duration = int(self.audio.get_duration())  # Whole seconds only
+        volume = self.audio.get_volume_level()
+
+        # Check if we should show warning for silence
+        if self._silence_detected:
+            # Show warning sign when no voice detected for 10+ seconds
+            self.title = f"{duration:3d}s ⚠️"
+        else:
+            # Get volume indicator (colored dot)
+            volume_indicator = self._get_recording_volume_indicator(volume)
+            # Put seconds first with fixed width, then dot - no jumping!
+            self.title = f"{duration:3d}s {volume_indicator}"
+
+    def _get_recording_volume_indicator(self, volume: float) -> str:
+        """Convert volume level to visual indicator for recording state.
+
+        Args:
+            volume: Volume level from 0.0 to 1.0
+
+        Returns:
+            Colored dot indicator based on volume level
+        """
+        # Simplified color scheme for recording:
+        # Black (silent) -> Yellow (quiet) -> Orange (medium) -> Blue (loud)
+        # No green during recording (green means ready)
+
+        if volume < 0.05:
+            # Very quiet/muted
+            return "⚫"  # Black circle
+        elif volume < 0.20:
+            # Quiet
+            return "🟡"  # Yellow circle
+        elif volume < 0.50:
+            # Medium
+            return "🟠"  # Orange circle
+        else:
+            # Loud
+            return "🔵"  # Blue circle
+
+    def _get_volume_indicator(self, volume: float) -> str:
+        """Convert volume level to visual indicator (for mic check).
+
+        Args:
+            volume: Volume level from 0.0 to 1.0
+
+        Returns:
+            Colored dot indicator based on volume level
+        """
+        # Full color scheme for mic check
+        if volume < 0.05:
+            return "⚫"  # Black
+        elif volume < 0.20:
+            return "🟡"  # Yellow
+        elif volume < 0.50:
+            return "🟠"  # Orange
+        elif volume < 0.80:
+            return "🟢"  # Green (good level)
+        else:
+            return "🔵"  # Blue (loud)
 
     def _update_status(self, status: str):
         """Update status menu item.
@@ -257,7 +341,36 @@ class DictatorApp(rumps.App):
         """
         self.status_item.title = f"Status: {status}"
         if status == "Ready":
-            self.title = ""
+            self.title = "🟢"  # Green dot when ready
+
+    @rumps.clicked("Mic Check")
+    def toggle_mic_check(self, sender):
+        """Toggle microphone level monitoring."""
+        if self.mic_check_timer and self.mic_check_timer.is_alive():
+            # Stop mic check
+            self.mic_check_timer.stop()
+            self.mic_check_timer = None
+            self.audio.stop_monitoring()
+            self.mic_check_item.title = "Mic Check"
+            self.title = "🟢"  # Back to green ready indicator
+            self._update_status("Ready")
+            logger.info("Mic check stopped")
+        else:
+            # Start mic check
+            self.audio.start_monitoring()
+            self.mic_check_item.title = "Stop Mic Check"
+            self._update_status("Monitoring mic...")
+
+            # Create timer to update mic level display
+            self.mic_check_timer = rumps.Timer(self._update_mic_level, 0.1)  # Update 10 times per second
+            self.mic_check_timer.start()
+            logger.info("Mic check started")
+
+    def _update_mic_level(self, timer):
+        """Update menubar with current microphone level."""
+        volume = self.audio.get_volume_level()
+        volume_bars = self._get_volume_indicator(volume)
+        self.title = f"🎤 {volume_bars}"
 
     @rumps.clicked("Show History")
     def show_history(self, _):
@@ -361,6 +474,14 @@ class DictatorApp(rumps.App):
             # Update audio processor with new corrector
             self.audio_processor.llm_corrector = self.llm_corrector
 
+            # Update audio recorder silence removal settings
+            self.audio.remove_silence = new_config.remove_silence_enabled
+            self.audio.silence_removal_threshold = new_config.silence_threshold
+            self.audio.min_silence_to_remove = new_config.min_silence_duration
+            logger.info(
+                f"Silence removal: {'enabled' if new_config.remove_silence_enabled else 'disabled'}"
+            )
+
             # Update history window if it exists
             if self.history_window:
                 self.history_window.set_llm_corrector(self.llm_corrector)
@@ -370,10 +491,74 @@ class DictatorApp(rumps.App):
         except Exception as e:
             logger.error(f"Failed to update configuration: {e}")
 
+    def _register_health_monitoring(self):
+        """Register components for health monitoring."""
+        # Monitor hotkey listener
+        self.health_monitor.register_component(
+            name="hotkey_listener",
+            check_callback=lambda: self.hotkey.is_running,
+            recovery_callback=lambda: self.hotkey.restart(),
+        )
+
+        # Monitor Whisper transcriber
+        self.health_monitor.register_component(
+            name="whisper_transcriber",
+            check_callback=lambda: self.transcriber.is_ready,
+            recovery_callback=lambda: self.transcriber.reload_model(),
+        )
+
+        # Monitor audio device availability
+        self.health_monitor.register_component(
+            name="audio_device",
+            check_callback=self._check_audio_device,
+            recovery_callback=self._recover_audio_device,
+        )
+
+        logger.info("Health monitoring registered for all components")
+
+    def _check_audio_device(self) -> bool:
+        """Check if audio device is available.
+
+        Returns:
+            True if audio device is working
+        """
+        try:
+            import sounddevice as sd
+
+            # Try to query devices
+            devices = sd.query_devices()
+            return len(devices) > 0
+        except Exception as e:
+            logger.error(f"Audio device check failed: {e}")
+            return False
+
+    def _recover_audio_device(self):
+        """Recover audio device after failure."""
+        logger.info("Recovering audio device")
+        try:
+            # Stop any existing monitoring/recording
+            if self.audio._stream:
+                self.audio._stream.stop()
+                self.audio._stream.close()
+                self.audio._stream = None
+
+            # Reset sounddevice
+            import sounddevice as sd
+            sd._terminate()
+            sd._initialize()
+
+            logger.info("Audio device recovered")
+        except Exception as e:
+            logger.error(f"Audio device recovery failed: {e}")
+
     @rumps.clicked("Quit Dictator")
     def quit_app(self, _):
         """Handle quit menu item."""
-        self.hotkey.stop()
+        logger.info("Dictator app terminating")
+        if self.hotkey:
+            self.hotkey.stop()
+        if self.health_monitor:
+            self.health_monitor.stop_monitoring()
         rumps.quit_application()
 
     def _copy_and_notify(self, text: str):
@@ -394,3 +579,20 @@ class DictatorApp(rumps.App):
             "",
             f"{text[:200]}\n\nGrant accessibility permissions in System Settings to auto-paste.",
         )
+
+    def _on_prolonged_silence(self, silence_duration: float):
+        """Handle prolonged silence detection during recording.
+
+        Args:
+            silence_duration: How long silence has been detected (seconds)
+        """
+        logger.warning(f"No voice detected for {silence_duration:.1f} seconds")
+
+        # Set flag to show warning icon in menubar
+        self._silence_detected = True
+
+    def _on_voice_resumed(self):
+        """Handle voice resuming after prolonged silence."""
+        if self._silence_detected:
+            logger.info("Voice detected again, clearing warning")
+            self._silence_detected = False
