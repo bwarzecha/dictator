@@ -146,6 +146,25 @@ class DictatorApp(rumps.App):
 
         logger.info("Dictator app initialized")
 
+    def _update_ui_safe(self, callback):
+        """Execute UI update on main thread safely.
+
+        AppKit UI must only be updated from the main thread to avoid
+        AutoLayout corruption and crashes. This helper ensures all UI
+        updates are dispatched to the main thread.
+
+        Args:
+            callback: Function to execute on main thread
+        """
+        if threading.current_thread() is threading.main_thread():
+            # Already on main thread, execute directly
+            callback()
+        else:
+            # Dispatch to main thread to avoid AutoLayout corruption
+            # Use DEBUG to avoid log spam from timer callbacks (10x/sec)
+            logger.debug(f"[{threading.current_thread().name}] Dispatching UI update to main thread")
+            AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(callback)
+
     def toggle_recording(self):
         """Handle hotkey press to toggle recording on/off."""
         if self.audio.is_recording:
@@ -160,7 +179,9 @@ class DictatorApp(rumps.App):
             self._silence_detected = False
 
             self.audio.start_recording()
-            self.title = "  0s ⚫"  # Start with seconds first, then black dot
+
+            # Update UI from main thread to prevent AutoLayout corruption
+            self._update_ui_safe(lambda: setattr(self, 'title', "  0s ⚫"))
             self._update_status("Recording...")
 
             # Start combined timer for both duration and volume (updates 10 times per second)
@@ -188,7 +209,8 @@ class DictatorApp(rumps.App):
 
             audio_path, duration = self.audio.stop_recording()
 
-            self.title = "🟡"  # Yellow for processing
+            # Update UI from main thread to prevent AutoLayout corruption
+            self._update_ui_safe(lambda: setattr(self, 'title', "🟡"))
             self._update_status("Transcribing...")
 
             threading.Thread(
@@ -206,7 +228,7 @@ class DictatorApp(rumps.App):
                 "",
                 f"Failed to stop: {e}",
             )
-            self.title = "🟢"  # Back to ready (green)
+            self._update_ui_safe(lambda: setattr(self, 'title', "🟢"))
             self._update_status("Ready")
 
     def _transcribe_and_insert(self, audio_path: Path, duration: float):
@@ -270,6 +292,9 @@ class DictatorApp(rumps.App):
     def _update_recording_display(self, timer):
         """Update menubar with recording status (duration and volume indicator).
 
+        Note: Timer callbacks should run on main thread, but we use _update_ui_safe
+        for consistency and defensive programming.
+
         Args:
             timer: rumps.Timer instance
         """
@@ -279,12 +304,12 @@ class DictatorApp(rumps.App):
         # Check if we should show warning for silence
         if self._silence_detected:
             # Show warning sign when no voice detected for 10+ seconds
-            self.title = f"{duration:3d}s ⚠️"
+            self._update_ui_safe(lambda: setattr(self, 'title', f"{duration:3d}s ⚠️"))
         else:
             # Get volume indicator (colored dot)
             volume_indicator = self._get_recording_volume_indicator(volume)
             # Put seconds first with fixed width, then dot - no jumping!
-            self.title = f"{duration:3d}s {volume_indicator}"
+            self._update_ui_safe(lambda: setattr(self, 'title', f"{duration:3d}s {volume_indicator}"))
 
     def _get_recording_volume_indicator(self, volume: float) -> str:
         """Convert volume level to visual indicator for recording state.
@@ -334,14 +359,17 @@ class DictatorApp(rumps.App):
             return "🔵"  # Blue (loud)
 
     def _update_status(self, status: str):
-        """Update status menu item.
+        """Update status menu item (thread-safe).
 
         Args:
             status: Status text to display
         """
-        self.status_item.title = f"Status: {status}"
-        if status == "Ready":
-            self.title = "🟢"  # Green dot when ready
+        def update():
+            self.status_item.title = f"Status: {status}"
+            if status == "Ready":
+                self.title = "🟢"  # Green dot when ready
+
+        self._update_ui_safe(update)
 
     @rumps.clicked("Mic Check")
     def toggle_mic_check(self, sender):
@@ -352,7 +380,8 @@ class DictatorApp(rumps.App):
             self.mic_check_timer = None
             self.audio.stop_monitoring()
             self.mic_check_item.title = "Mic Check"
-            self.title = "🟢"  # Back to green ready indicator
+            # Rumps menu clicks run on main thread, but use _update_ui_safe for consistency
+            self._update_ui_safe(lambda: setattr(self, 'title', "🟢"))
             self._update_status("Ready")
             logger.info("Mic check stopped")
         else:
@@ -367,10 +396,14 @@ class DictatorApp(rumps.App):
             logger.info("Mic check started")
 
     def _update_mic_level(self, timer):
-        """Update menubar with current microphone level."""
+        """Update menubar with current microphone level.
+
+        Note: Timer callbacks should run on main thread, but we use _update_ui_safe
+        for consistency and defensive programming.
+        """
         volume = self.audio.get_volume_level()
         volume_bars = self._get_volume_indicator(volume)
-        self.title = f"🎤 {volume_bars}"
+        self._update_ui_safe(lambda: setattr(self, 'title', f"🎤 {volume_bars}"))
 
     @rumps.clicked("Show History")
     def show_history(self, _):
