@@ -67,6 +67,9 @@ class AudioRecorder:
         self._current_volume = 0.0
         self._peak_volume = 0.0  # Reset peak tracking
 
+        # Reset device cache to pick up current system default
+        sd.default.reset()
+
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
@@ -102,6 +105,9 @@ class AudioRecorder:
 
         # If not already monitoring, start stream
         if not self._stream or not self._stream.active:
+            # Reset device cache to pick up current system default
+            sd.default.reset()
+
             self._stream = sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=1,
