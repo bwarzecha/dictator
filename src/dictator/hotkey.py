@@ -10,6 +10,42 @@ from pynput import keyboard
 logger = logging.getLogger(__name__)
 
 
+def _prewarm_hiservices() -> None:
+    """Pre-warm the HIServices module to avoid lazy import race conditions.
+
+    The objc lazy import mechanism has a race condition that can cause
+    KeyError when multiple threads try to access the same function.
+    This function ensures the module is fully loaded before starting threads.
+    """
+    try:
+        import platform
+        if platform.system() == "Darwin":
+            import time
+            # Import the module and force the lazy loading to complete
+            from Quartz import HIServices
+
+            # Try multiple times to ensure the lazy import completes
+            # This works around a race condition in objc._lazyimport
+            for attempt in range(5):
+                try:
+                    # Access the function to trigger lazy loading
+                    _ = HIServices.AXIsProcessTrusted
+                    # If we got here without KeyError, the import is complete
+                    logger.debug(f"HIServices pre-warmed successfully on attempt {attempt + 1}")
+                    return
+                except (KeyError, AttributeError) as e:
+                    if attempt < 4:
+                        logger.debug(f"HIServices pre-warm attempt {attempt + 1} failed: {e}, retrying...")
+                        time.sleep(0.1)
+                    else:
+                        logger.warning(f"HIServices pre-warm failed after 5 attempts: {e}")
+    except ImportError:
+        # Not on macOS or Quartz not available
+        pass
+    except Exception as e:
+        logger.warning(f"HIServices pre-warm failed: {e}")
+
+
 def check_input_monitoring_permission() -> bool:
     """Check if app has Input Monitoring permission.
 
@@ -17,6 +53,9 @@ def check_input_monitoring_permission() -> bool:
         True if permission granted, False otherwise
     """
     try:
+        # Pre-warm the HIServices module to avoid race conditions
+        _prewarm_hiservices()
+
         # For macOS, check if we can access the AXIsProcessTrusted API
         # If the API is not available or fails, we assume permission is not granted
         import platform
@@ -63,6 +102,11 @@ class HotkeyListener:
 
     def start(self) -> None:
         """Start listening for hotkey in background thread with retry logic."""
+        import time
+
+        # Pre-warm HIServices to avoid race condition
+        _prewarm_hiservices()
+
         max_retries = 3
         retry_delay = 0.5  # seconds
 
@@ -74,12 +118,29 @@ class HotkeyListener:
                 )
                 self._listener.daemon = True
                 self._listener.start()
-                logger.info("Hotkey listener started")
+
+                # Wait a bit to ensure the thread actually starts successfully
+                # The KeyError can happen in the thread's _run() method after start() returns
+                time.sleep(0.2)
+
+                # Check if the listener is actually running
+                if not self._listener.running:
+                    raise RuntimeError("Listener thread failed to start or died immediately")
+
+                logger.info("Hotkey listener started successfully")
                 return
+
             except Exception as e:
+                # Clean up failed listener
+                if self._listener:
+                    try:
+                        self._listener.stop()
+                    except:
+                        pass
+                    self._listener = None
+
                 if attempt < max_retries - 1:
-                    logger.warning(f"Failed to start hotkey listener (attempt {attempt + 1}): {e}. Retrying in {retry_delay}s...")
-                    import time
+                    logger.warning(f"Failed to start hotkey listener (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {retry_delay}s...")
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
